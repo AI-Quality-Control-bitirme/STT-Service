@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
 
-from app.api.routes import health
+from app.api.routes import calls, health
 from app.core.config import get_settings
 
 
@@ -22,6 +22,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(health.router)
+    app.include_router(calls.router)
     return app
 
 
