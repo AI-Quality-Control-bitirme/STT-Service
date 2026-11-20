@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.call import Call
+from app.models.enums import ProcessingStatus
 from app.models.transcription import Transcription
 from app.schemas.call import CallCreate
 from app.schemas.transcription import TranscriptionCreate
@@ -43,6 +44,24 @@ class CallRepository:
         )
         return list(self._session.scalars(stmt).all())
 
+    def update_call(
+        self,
+        call_id: UUID,
+        *,
+        processing_status: ProcessingStatus | None = None,
+        audio_file_ref: str | None = None,
+    ) -> Call | None:
+        call = self.get_call(call_id)
+        if call is None:
+            return None
+        if processing_status is not None:
+            call.processing_status = processing_status
+        if audio_file_ref is not None:
+            call.audio_file_ref = audio_file_ref
+        self._session.commit()
+        self._session.refresh(call)
+        return call
+
     def add_transcription(
         self, call_id: UUID, data: TranscriptionCreate
     ) -> Transcription | None:
@@ -57,6 +76,33 @@ class CallRepository:
             error_message=data.error_message,
         )
         self._session.add(transcription)
+        self._session.commit()
+        self._session.refresh(transcription)
+        return transcription
+
+    def update_transcription(
+        self,
+        transcription_id: UUID,
+        *,
+        transcript_text: str | None = None,
+        language: str | None = None,
+        processing_status: ProcessingStatus | None = None,
+        error_message: str | None = None,
+        clear_error: bool = False,
+    ) -> Transcription | None:
+        transcription = self.get_transcription(transcription_id)
+        if transcription is None:
+            return None
+        if transcript_text is not None:
+            transcription.transcript_text = transcript_text
+        if language is not None:
+            transcription.language = language
+        if processing_status is not None:
+            transcription.processing_status = processing_status
+        if clear_error:
+            transcription.error_message = None
+        elif error_message is not None:
+            transcription.error_message = error_message
         self._session.commit()
         self._session.refresh(transcription)
         return transcription
