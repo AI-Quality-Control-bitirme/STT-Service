@@ -22,6 +22,12 @@ class Settings(BaseSettings):
         "postgresql+psycopg://stt_user:stt_pass@localhost:5432/stt_db"
     )
 
+    stt_provider: str = "mock"
+    openai_api_key: str | None = None
+    openai_whisper_model: str = "whisper-1"
+    upload_dir: str = "uploads"
+    max_upload_size_mb: int = 25
+
 
 @lru_cache
 def get_settings() -> Settings:

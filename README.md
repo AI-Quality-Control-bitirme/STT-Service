@@ -14,7 +14,10 @@ STT-Service/
 │   │   ├── deps.py
 │   │   └── routes/
 │   │       ├── health.py
-│   │       └── calls.py     # Call + transcription CRUD
+│   │       ├── calls.py
+│   │       └── transcribe.py  # Upload + STT (SCRUM-56)
+│   ├── services/
+│   │   └── stt/             # mock + OpenAI Whisper providers
 │   ├── core/
 │   │   └── config.py
 │   ├── db/
@@ -63,6 +66,9 @@ STT-Service/
    | `HOST`          | 0.0.0.0                                                            | Bind host                |
    | `PORT`          | 8000                                                               | Bind port                |
    | `DATABASE_URL`  | postgresql+psycopg://stt_user:stt_pass@localhost:5432/stt_db     | PostgreSQL connection    |
+   | `STT_PROVIDER`  | mock                                                               | `mock` or `openai`       |
+   | `OPENAI_API_KEY`| (unset)                                                            | Required for OpenAI STT  |
+   | `UPLOAD_DIR`    | uploads                                                            | Stored audio files       |
 
 4. Create the database (once) and run migrations:
 
@@ -145,3 +151,63 @@ Retrieve a transcription by id:
 ```bash
 curl -s "http://localhost:8000/transcriptions/<transcription-uuid>"
 ```
+
+## Speech-to-text (SCRUM-56)
+
+`POST /transcribe` accepts a multipart audio upload, runs the configured STT provider, and persists the call + transcription rows (including `processing_status`).
+
+### Providers
+
+| `STT_PROVIDER` | Behavior |
+|----------------|----------|
+| `mock` (default) | No API key; returns a deterministic placeholder transcript. Use for local smoke tests and CI. |
+| `openai` | Calls OpenAI Whisper (`OPENAI_API_KEY` required). |
+
+### Smoke test (mock, no API key)
+
+```bash
+# Create a tiny sample file (replace with a real .wav/.mp3 for quality testing)
+printf 'RIFF....' > /tmp/sample.wav
+
+curl -s -X POST http://localhost:8000/transcribe \
+  -F "audio=@/tmp/sample.wav;type=audio/wav" \
+  -F "caller_number=+905551234567" | python3 -m json.tool
+```
+
+Expect `call.processing_status` and `transcription.processing_status` of `completed`, with a `[mock]` transcript string.
+
+### Real transcription (OpenAI Whisper)
+
+```bash
+export STT_PROVIDER=openai
+export OPENAI_API_KEY=sk-your-key
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+curl -s -X POST http://localhost:8000/transcribe \
+  -F "audio=@/path/to/recording.mp3;type=audio/mpeg" \
+  -F "external_call_id=demo-001" | python3 -m json.tool
+```
+
+### Provider failure handling
+
+Failures are logged server-side (`STT provider failed for call ...`) and stored on the transcription row:
+
+- `transcription.processing_status` → `failed`
+- `transcription.error_message` → provider error text
+- `call.processing_status` → `failed`
+
+To verify locally without calling OpenAI:
+
+```bash
+STT_PROVIDER=openai uvicorn app.main:app --port 8000
+# POST /transcribe → fails with missing OPENAI_API_KEY; check logs and JSON error_message
+```
+
+### Manual transcription quality testing
+
+1. Prepare 2–3 reference recordings (e.g. clear Turkish support call, noisy line, short greeting) with known expected phrases.
+2. Run each file through `POST /transcribe` with `STT_PROVIDER=openai` and a valid `OPENAI_API_KEY`.
+3. Compare `transcription.transcript_text` to the expected text:
+   - Note word errors, missing sentences, and language detection (`language` field when available).
+4. Re-fetch via `GET /transcriptions/{id}` or `GET /calls/{call_id}` to confirm persistence.
+5. Record findings (file name, expected vs actual, pass/fail) in your sprint notes or Jira comment for SCRUM-56.

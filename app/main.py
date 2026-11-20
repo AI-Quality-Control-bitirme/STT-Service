@@ -3,8 +3,11 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
 
-from app.api.routes import calls, health
+from app.api.routes import calls, health, transcribe
 from app.core.config import get_settings
+from app.core.logging import configure_logging
+
+configure_logging()
 
 
 @asynccontextmanager
@@ -23,6 +26,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(calls.router)
+    app.include_router(transcribe.router)
     return app
 
 
