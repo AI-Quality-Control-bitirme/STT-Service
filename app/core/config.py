@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    database_url: str = (
+        "postgresql+psycopg://stt_user:stt_pass@localhost:5432/stt_db"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
