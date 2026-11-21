@@ -18,6 +18,6 @@ class MockSttProvider:
         logger.info("Mock STT transcribing %s (%s bytes)", audio_path.name, size)
         text = (
             f"[mock] Transcription of {audio_path.name} "
-            f"({size} bytes). Set STT_PROVIDER=openai and OPENAI_API_KEY for real STT."
+            f"({size} bytes). Use default STT_PROVIDER=local or STT_PROVIDER=openai for real STT."
         )
         return TranscriptionResult(text=text, language="mock")

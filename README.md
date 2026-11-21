@@ -17,7 +17,7 @@ STT-Service/
 │   │       ├── calls.py
 │   │       └── transcribe.py  # Upload + STT (SCRUM-56)
 │   ├── services/
-│   │   └── stt/             # mock + OpenAI Whisper providers
+│   │   └── stt/             # local faster-whisper, OpenAI Whisper, mock (tests)
 │   ├── core/
 │   │   └── config.py
 │   ├── db/
@@ -36,6 +36,7 @@ STT-Service/
 
 - Python 3.11+
 - PostgreSQL 14+
+- **ffmpeg** (recommended for decoding non-WAV uploads; `faster-whisper` uses PyAV)
 
 ## Setup
 
@@ -52,23 +53,29 @@ STT-Service/
    pip install -r requirements.txt
    ```
 
+   The first local transcription downloads the Whisper weights from Hugging Face
+   (default model size `tiny`, ~75 MB). No API key is required.
+
 3. Copy environment configuration:
 
    ```bash
    cp .env.example .env
    ```
 
-   | Variable        | Default                                                          | Description              |
-   |-----------------|--------------------------------------------------------------------|--------------------------|
-   | `APP_NAME`      | STT Service                                                        | Application display name |
-   | `APP_ENV`       | development                                                        | Environment label        |
-   | `DEBUG`         | true                                                               | Enable debug mode        |
-   | `HOST`          | 0.0.0.0                                                            | Bind host                |
-   | `PORT`          | 8000                                                               | Bind port                |
-   | `DATABASE_URL`  | postgresql+psycopg://stt_user:stt_pass@localhost:5432/stt_db     | PostgreSQL connection    |
-   | `STT_PROVIDER`  | mock                                                               | `mock` or `openai`       |
-   | `OPENAI_API_KEY`| (unset)                                                            | Required for OpenAI STT  |
-   | `UPLOAD_DIR`    | uploads                                                            | Stored audio files       |
+   | Variable                   | Default                                                          | Description                        |
+   |----------------------------|--------------------------------------------------------------------|------------------------------------|
+   | `APP_NAME`                 | STT Service                                                        | Application display name           |
+   | `APP_ENV`                  | development                                                        | Environment label                  |
+   | `DEBUG`                    | true                                                               | Enable debug mode                  |
+   | `HOST`                     | 0.0.0.0                                                            | Bind host                          |
+   | `PORT`                     | 8000                                                               | Bind port                          |
+   | `DATABASE_URL`             | postgresql+psycopg://stt_user:stt_pass@localhost:5432/stt_db     | PostgreSQL connection              |
+   | `STT_PROVIDER`             | local                                                              | `local`, `openai`, or `mock`       |
+   | `LOCAL_WHISPER_MODEL`      | tiny                                                               | faster-whisper size: tiny/base/...  |
+   | `LOCAL_WHISPER_DEVICE`     | cpu                                                                | `cpu` or `cuda`                    |
+   | `LOCAL_WHISPER_COMPUTE_TYPE` | int8                                                             | int8 / float16 / ...               |
+   | `OPENAI_API_KEY`           | (unset)                                                            | Required when `STT_PROVIDER=openai`|
+   | `UPLOAD_DIR`               | uploads                                                            | Stored audio files                 |
 
 4. Create the database (once) and run migrations:
 
@@ -106,6 +113,8 @@ STT-Service/
 | `error_message`      | text        | Set when status is failed          |
 | `created_at`         | timestamptz |                                    |
 | `updated_at`         | timestamptz |                                    |
+
+Speaker diarization is **not** implemented; transcripts are plain full-utterance text.
 
 ## Startup
 
@@ -160,23 +169,60 @@ curl -s "http://localhost:8000/transcriptions/<transcription-uuid>"
 
 | `STT_PROVIDER` | Behavior |
 |----------------|----------|
-| `mock` (default) | No API key; returns a deterministic placeholder transcript. Use for local smoke tests and CI. |
-| `openai` | Calls OpenAI Whisper (`OPENAI_API_KEY` required). |
+| `local` (default) | **faster-whisper** on CPU; no API key. Default model `tiny` (fast demo). First request downloads model weights. |
+| `openai` | OpenAI Whisper API (`OPENAI_API_KEY` required). Optional upgrade for better accuracy. |
+| `mock` | Placeholder transcript only. Set explicitly for automated tests/CI — **not** used by default. |
 
-### Smoke test (mock, no API key)
+### Verify local transcription (default)
+
+Use any speech recording (WAV, MP3, or FLAC). Example with OpenAI's public JFK test clip:
 
 ```bash
-# Create a tiny sample file (replace with a real .wav/.mp3 for quality testing)
-printf 'RIFF....' > /tmp/sample.wav
+curl -L -o /tmp/sample_speech.flac \
+  "https://raw.githubusercontent.com/openai/whisper/main/tests/jfk.flac"
+
+# STT_PROVIDER defaults to local; PostgreSQL must be running and migrated
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 curl -s -X POST http://localhost:8000/transcribe \
-  -F "audio=@/tmp/sample.wav;type=audio/wav" \
+  -F "audio=@/tmp/sample_speech.flac;type=audio/flac" \
   -F "caller_number=+905551234567" | python3 -m json.tool
 ```
 
-Expect `call.processing_status` and `transcription.processing_status` of `completed`, with a `[mock]` transcript string.
+Expect:
 
-### Real transcription (OpenAI Whisper)
+- `transcription.processing_status` → `completed`
+- `transcription.transcript_text` → real words (not a `[mock]` prefix)
+- `transcription.language` → detected language when confidence is high enough
+
+For a quick unit smoke test without HTTP or PostgreSQL:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+from app.services.stt.factory import get_stt_provider
+from app.core.config import Settings
+
+provider = get_stt_provider(Settings(stt_provider="local", local_whisper_model="tiny"))
+# replace with any local speech .wav path
+result = provider.transcribe(Path("/tmp/sample_speech.flac"))
+print(result.text)
+PY
+```
+
+### Mock provider (tests only)
+
+```bash
+export STT_PROVIDER=mock
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+curl -s -X POST http://localhost:8000/transcribe \
+  -F "audio=@/tmp/sample_speech.flac;type=audio/flac" | python3 -m json.tool
+```
+
+Expect a `[mock]` transcript string.
+
+### OpenAI Whisper (optional cloud)
 
 ```bash
 export STT_PROVIDER=openai
@@ -196,17 +242,17 @@ Failures are logged server-side (`STT provider failed for call ...`) and stored 
 - `transcription.error_message` → provider error text
 - `call.processing_status` → `failed`
 
-To verify locally without calling OpenAI:
+To verify OpenAI wiring without a key:
 
 ```bash
 STT_PROVIDER=openai uvicorn app.main:app --port 8000
-# POST /transcribe → fails with missing OPENAI_API_KEY; check logs and JSON error_message
+# POST /transcribe → fails at startup or request with missing OPENAI_API_KEY
 ```
 
 ### Manual transcription quality testing
 
 1. Prepare 2–3 reference recordings (e.g. clear Turkish support call, noisy line, short greeting) with known expected phrases.
-2. Run each file through `POST /transcribe` with `STT_PROVIDER=openai` and a valid `OPENAI_API_KEY`.
+2. Run each file through `POST /transcribe` with default `STT_PROVIDER=local` or with `openai` and a valid `OPENAI_API_KEY`.
 3. Compare `transcription.transcript_text` to the expected text:
    - Note word errors, missing sentences, and language detection (`language` field when available).
 4. Re-fetch via `GET /transcriptions/{id}` or `GET /calls/{call_id}` to confirm persistence.

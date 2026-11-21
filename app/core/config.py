@@ -22,7 +22,10 @@ class Settings(BaseSettings):
         "postgresql+psycopg://stt_user:stt_pass@localhost:5432/stt_db"
     )
 
-    stt_provider: str = "mock"
+    stt_provider: str = "local"
+    local_whisper_model: str = "tiny"
+    local_whisper_device: str = "cpu"
+    local_whisper_compute_type: str = "int8"
     openai_api_key: str | None = None
     openai_whisper_model: str = "whisper-1"
     upload_dir: str = "uploads"
