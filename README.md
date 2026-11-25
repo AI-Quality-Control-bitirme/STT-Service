@@ -170,6 +170,37 @@ Error responses:
 | `413` | File larger than `MAX_UPLOAD_SIZE_MB` |
 | `422` | Missing or empty file, or invalid metadata |
 
+## Status and transcript retrieval (SCRUM-57)
+
+Used by the AI Evaluation Service to poll a call and fetch its transcript.
+
+```bash
+curl -s "http://localhost:8000/calls/${CALL_ID}"             # processing_status: pending / processing / completed / failed
+curl -s "http://localhost:8000/calls/${CALL_ID}/transcript"  # latest completed transcript
+```
+
+`GET /calls/{id}/transcript` returns `call_id`, `transcription_id`, `transcript_text`, `language`, `created_at` and `updated_at` when the latest transcription is completed.
+
+| Status | When |
+|--------|------|
+| `200` | Latest transcription is completed |
+| `404` | Unknown call, or call is completed but has no transcript text |
+| `409` | Transcription is `pending`, `processing` or `failed`; `detail` contains `message`, `call_id`, `processing_status` and `error_message` |
+| `422` | Call ID is not a valid UUID |
+
+Example `409` body:
+
+```json
+{
+  "detail": {
+    "message": "Transcription is not ready yet",
+    "call_id": "6f1c...",
+    "processing_status": "processing",
+    "error_message": null
+  }
+}
+```
+
 ## Calls and transcriptions (SCRUM-54)
 
 Add a transcription result:

@@ -108,6 +108,15 @@ class CallRepository:
         self._session.refresh(transcription)
         return transcription
 
+    def get_latest_transcription(self, call_id: UUID) -> Transcription | None:
+        stmt = (
+            select(Transcription)
+            .where(Transcription.call_id == call_id)
+            .order_by(Transcription.created_at.desc())
+            .limit(1)
+        )
+        return self._session.scalar(stmt)
+
     def get_transcription(self, transcription_id: UUID) -> Transcription | None:
         stmt = select(Transcription).where(Transcription.id == transcription_id)
         return self._session.scalar(stmt)

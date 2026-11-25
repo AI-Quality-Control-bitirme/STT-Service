@@ -9,10 +9,16 @@ from pydantic import ValidationError
 
 from app.api.deps import get_call_repository, get_call_upload_service
 from app.models.call import Call
+from app.models.enums import ProcessingStatus
 from app.models.transcription import Transcription
 from app.repositories.call_repository import CallRepository
 from app.schemas.call import CallRead, CallUploadMetadata
-from app.schemas.transcription import TranscriptionCreate, TranscriptionRead
+from app.schemas.transcription import (
+    TranscriptionCreate,
+    TranscriptionRead,
+    TranscriptRead,
+    TranscriptUnavailable,
+)
 from app.services.call_upload_service import AudioUploadError, CallUploadService
 
 logger = logging.getLogger(__name__)
@@ -75,6 +81,65 @@ def get_call(
             detail="Call not found",
         )
     return call
+
+
+@calls_router.get(
+    "/{call_id}/transcript",
+    response_model=TranscriptRead,
+    responses={
+        404: {"description": "Call not found, or the call has no transcript"},
+        409: {"description": "Transcription is pending, processing or failed"},
+    },
+)
+def get_call_transcript(
+    call_id: UUID,
+    repository: CallRepository = Depends(get_call_repository),
+) -> TranscriptRead:
+    call = repository.get_call(call_id)
+    if call is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Call not found",
+        )
+
+    transcription = repository.get_latest_transcription(call_id)
+    if (
+        transcription is not None
+        and transcription.processing_status == ProcessingStatus.COMPLETED
+        and transcription.transcript_text is not None
+    ):
+        return TranscriptRead(
+            call_id=call_id,
+            transcription_id=transcription.id,
+            transcript_text=transcription.transcript_text,
+            language=transcription.language,
+            created_at=transcription.created_at,
+            updated_at=transcription.updated_at,
+        )
+
+    current_status = (
+        transcription.processing_status if transcription else call.processing_status
+    )
+    if current_status == ProcessingStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Transcript not found for this call",
+        )
+
+    message = (
+        "Transcription failed"
+        if current_status == ProcessingStatus.FAILED
+        else "Transcription is not ready yet"
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=TranscriptUnavailable(
+            message=message,
+            call_id=call_id,
+            processing_status=current_status,
+            error_message=transcription.error_message if transcription else None,
+        ).model_dump(mode="json"),
+    )
 
 
 @calls_router.post(
