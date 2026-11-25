@@ -1,4 +1,4 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -14,8 +14,9 @@ class CallRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create_call(self, data: CallCreate) -> Call:
+    def create_call(self, data: CallCreate, call_id: UUID | None = None) -> Call:
         call = Call(
+            id=call_id or uuid4(),
             audio_file_ref=data.audio_file_ref,
             external_call_id=data.external_call_id,
             caller_number=data.caller_number,
@@ -106,6 +107,15 @@ class CallRepository:
         self._session.commit()
         self._session.refresh(transcription)
         return transcription
+
+    def get_latest_transcription(self, call_id: UUID) -> Transcription | None:
+        stmt = (
+            select(Transcription)
+            .where(Transcription.call_id == call_id)
+            .order_by(Transcription.created_at.desc())
+            .limit(1)
+        )
+        return self._session.scalar(stmt)
 
     def get_transcription(self, transcription_id: UUID) -> Transcription | None:
         stmt = select(Transcription).where(Transcription.id == transcription_id)

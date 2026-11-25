@@ -124,21 +124,84 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 API docs: `http://localhost:8000/docs`
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Tests use an in-memory SQLite database and do not need PostgreSQL or Whisper weights.
+
 ## Health check
 
 ```bash
 curl -i http://localhost:8000/health
 ```
 
-## Calls and transcriptions (SCRUM-54)
+## Audio upload (SCRUM-55)
 
-Create a call (stores audio reference + metadata):
+`POST /calls` accepts a call recording in MP3 format plus optional call metadata as `multipart/form-data`. The file is stored in `UPLOAD_DIR` as `<call_id>.mp3` and the call is recorded with `processing_status=pending`.
 
 ```bash
 curl -s -X POST http://localhost:8000/calls \
-  -H 'Content-Type: application/json' \
-  -d '{"audio_file_ref": "s3://bucket/recordings/call-001.wav", "caller_number": "+905551234567"}'
+  -F "audio=@/path/to/call-001.mp3;type=audio/mpeg" \
+  -F "caller_number=+905551234567" \
+  -F "callee_number=+902321234567" \
+  -F "external_call_id=pbx-42" \
+  -F "call_started_at=2026-11-20T10:00:00Z" \
+  -F "call_ended_at=2026-11-20T10:05:00Z" \
+  -F "duration_seconds=300" | python3 -m json.tool
 ```
+
+| Field | Required | Validation |
+|-------|----------|------------|
+| `audio` | yes | `.mp3` extension, `audio/mpeg` content type, MP3 header, not empty, at most `MAX_UPLOAD_SIZE_MB` |
+| `external_call_id` | no | max 255 characters |
+| `caller_number`, `callee_number` | no | max 64 characters |
+| `call_started_at`, `call_ended_at` | no | ISO 8601; end must not be before start |
+| `duration_seconds` | no | integer ≥ 0 |
+
+Error responses:
+
+| Status | When |
+|--------|------|
+| `415` | Not an MP3 file (extension, content type or file header) |
+| `413` | File larger than `MAX_UPLOAD_SIZE_MB` |
+| `422` | Missing or empty file, or invalid metadata |
+
+## Status and transcript retrieval (SCRUM-57)
+
+Used by the AI Evaluation Service to poll a call and fetch its transcript.
+
+```bash
+curl -s "http://localhost:8000/calls/${CALL_ID}"             # processing_status: pending / processing / completed / failed
+curl -s "http://localhost:8000/calls/${CALL_ID}/transcript"  # latest completed transcript
+```
+
+`GET /calls/{id}/transcript` returns `call_id`, `transcription_id`, `transcript_text`, `language`, `created_at` and `updated_at` when the latest transcription is completed.
+
+| Status | When |
+|--------|------|
+| `200` | Latest transcription is completed |
+| `404` | Unknown call, or call is completed but has no transcript text |
+| `409` | Transcription is `pending`, `processing` or `failed`; `detail` contains `message`, `call_id`, `processing_status` and `error_message` |
+| `422` | Call ID is not a valid UUID |
+
+Example `409` body:
+
+```json
+{
+  "detail": {
+    "message": "Transcription is not ready yet",
+    "call_id": "6f1c...",
+    "processing_status": "processing",
+    "error_message": null
+  }
+}
+```
+
+## Calls and transcriptions (SCRUM-54)
 
 Add a transcription result:
 
